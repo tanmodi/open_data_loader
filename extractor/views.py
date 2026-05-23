@@ -1,5 +1,6 @@
 import json
 import tempfile
+from html import escape
 from io import BytesIO
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 
 def home(_request):
-    return HttpResponse("server working\n", content_type="text/plain")
+    return render_upload_ui()
 
 
 @csrf_exempt
@@ -25,7 +26,7 @@ def upload2(request):
 
 def handle_pdf_upload(request, extractor):
     if request.method == "GET":
-        return upload_form(request.path)
+        return render_upload_ui(active_path=request.path)
 
     if request.method != "POST":
         return HttpResponseBadRequest("Use GET or POST with a PDF file in the 'file' form field.\n")
@@ -47,22 +48,236 @@ def handle_pdf_upload(request, extractor):
     return response
 
 
-def upload_form(action):
+def render_upload_ui(active_path="/upload"):
+    active_path = active_path if active_path in {"/upload", "/upload2"} else "/upload"
     html = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Upload PDF</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Open Data Loader</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #18202a;
+      --muted: #647184;
+      --border: #d7dde6;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --shadow: 0 16px 40px rgba(24, 32, 42, 0.08);
+    }}
+
+    * {{
+      box-sizing: border-box;
+    }}
+
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }}
+
+    .shell {{
+      width: min(940px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0;
+    }}
+
+    header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 28px;
+    }}
+
+    h1 {{
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.2;
+    }}
+
+    .status {{
+      padding: 8px 12px;
+      border: 1px solid #b7e0d9;
+      border-radius: 999px;
+      color: #075047;
+      background: #e6f6f3;
+      font-size: 14px;
+      white-space: nowrap;
+    }}
+
+    .layout {{
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+    }}
+
+    nav {{
+      display: grid;
+      gap: 10px;
+    }}
+
+    nav a {{
+      display: block;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      text-decoration: none;
+      background: var(--panel);
+    }}
+
+    nav a.active {{
+      border-color: var(--accent);
+      color: var(--accent-dark);
+      font-weight: 700;
+    }}
+
+    main {{
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }}
+
+    h2 {{
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.25;
+    }}
+
+    p {{
+      margin: 0 0 22px;
+      color: var(--muted);
+      line-height: 1.5;
+    }}
+
+    form {{
+      display: grid;
+      gap: 16px;
+    }}
+
+    .file-box {{
+      display: grid;
+      gap: 10px;
+      padding: 22px;
+      border: 1px dashed #9aa8ba;
+      border-radius: 8px;
+      background: #fbfcfd;
+    }}
+
+    label {{
+      font-weight: 700;
+    }}
+
+    input[type="file"] {{
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--text);
+    }}
+
+    button {{
+      justify-self: start;
+      min-height: 44px;
+      padding: 0 18px;
+      border: 0;
+      border-radius: 8px;
+      color: #ffffff;
+      background: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+    }}
+
+    button:hover {{
+      background: var(--accent-dark);
+    }}
+
+    .note {{
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      font-size: 14px;
+      color: var(--muted);
+    }}
+
+    code {{
+      font-family: Consolas, Monaco, monospace;
+      font-size: 0.95em;
+      color: #273244;
+    }}
+
+    @media (max-width: 720px) {{
+      header {{
+        align-items: flex-start;
+        flex-direction: column;
+      }}
+
+      .layout {{
+        grid-template-columns: 1fr;
+      }}
+
+      main {{
+        padding: 22px;
+      }}
+    }}
+  </style>
 </head>
 <body>
-  <form method="post" action="{action}" enctype="multipart/form-data">
-    <input type="file" name="file" accept="application/pdf" required>
-    <button type="submit">Upload</button>
-  </form>
+  <div class="shell">
+    <header>
+      <h1>Open Data Loader</h1>
+      <div class="status">server working</div>
+    </header>
+    <div class="layout">
+      <nav aria-label="Extractor">
+        {nav_link("/upload", "PDF Plumber", active_path)}
+        {nav_link("/upload2", "OpenDataLoader PDF", active_path)}
+      </nav>
+      {upload_panel(active_path)}
+    </div>
+  </div>
 </body>
 </html>
 """
     return HttpResponse(html, content_type="text/html; charset=utf-8")
+
+
+def nav_link(path, label, active_path):
+    active_class = ' class="active"' if path == active_path else ""
+    return f'<a href="{path}"{active_class}>{escape(label)}</a>'
+
+
+def upload_panel(action):
+    title = "PDF Plumber extraction" if action == "/upload" else "OpenDataLoader PDF extraction"
+    detail = (
+        "Extract plain text, JSON tables, and table text with pdfplumber."
+        if action == "/upload"
+        else "Extract plain text, JSON tables, and table text with OpenDataLoader PDF."
+    )
+    return f"""<main>
+        <h2>{escape(title)}</h2>
+        <p>{escape(detail)}</p>
+        <form method="post" action="{escape(action)}" enctype="multipart/form-data">
+          <div class="file-box">
+            <label for="file">PDF file</label>
+            <input id="file" type="file" name="file" accept="application/pdf,.pdf" required>
+          </div>
+          <button type="submit">Download TXT</button>
+        </form>
+        <div class="note">
+          The downloaded TXT includes <code>###PLAIN_START###</code>, <code>###TABLE_START###</code>, and <code>###BEXT_TABLE_START###</code> sections.
+        </div>
+      </main>"""
 
 
 def extract_pdf(pdf_bytes, _filename="uploaded.pdf"):
