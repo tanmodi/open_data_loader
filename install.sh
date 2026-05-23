@@ -65,6 +65,7 @@ configure_ollama_service() {
   cat > "$override_file" <<EOF
 [Service]
 Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_LOAD_TIMEOUT=15m"
 EOF
   run_sudo mv "$override_file" /etc/systemd/system/ollama.service.d/openloader.conf
   run_sudo systemctl daemon-reload

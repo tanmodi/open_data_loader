@@ -11,6 +11,7 @@ services:
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b}"
       OLLAMA_NUM_CTX: "${OLLAMA_NUM_CTX:-2048}"
+      OLLAMA_TIMEOUT: "${OLLAMA_TIMEOUT:-900}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
