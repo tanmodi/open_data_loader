@@ -5,21 +5,25 @@ APP_DIR="${APP_DIR:-/home/bsnl/openloader}"
 REPO_URL="${REPO_URL:-https://github.com/tanmodi/open_data_loader.git}"
 BRANCH="${BRANCH:-main}"
 
-if [[ "$(id -u)" -eq 0 ]]; then
-  SUDO=""
-else
-  SUDO="sudo"
-fi
+run_sudo() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif [[ -n "${SUDO_PASSWORD:-}" ]]; then
+    printf '%s\n' "$SUDO_PASSWORD" | sudo -S "$@"
+  else
+    sudo "$@"
+  fi
+}
 
 install_packages() {
-  $SUDO apt-get update
-  $SUDO apt-get install -y ca-certificates curl git openssl
+  run_sudo apt-get update
+  run_sudo apt-get install -y ca-certificates curl git openssl
 
   if ! command -v docker >/dev/null 2>&1; then
-    curl -fsSL https://get.docker.com | $SUDO sh
+    curl -fsSL https://get.docker.com | run_sudo sh
   fi
 
-  $SUDO systemctl enable --now docker
+  run_sudo systemctl enable --now docker
 }
 
 sync_repo() {
@@ -46,7 +50,7 @@ EOF
 
 start_app() {
   cd "$APP_DIR"
-  $SUDO docker compose up -d --build
+  run_sudo docker compose up -d --build
 }
 
 install_packages
