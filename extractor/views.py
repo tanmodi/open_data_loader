@@ -16,7 +16,8 @@ from django.views.decorators.csrf import csrf_exempt
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))
-OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+OLLAMA_NUM_THREAD = int(os.environ.get("OLLAMA_NUM_THREAD", "8"))
 
 
 def home(_request):
@@ -501,6 +502,7 @@ def run_bill_extraction_llm(extracted_text):
             "options": {
                 "temperature": 0,
                 "num_ctx": OLLAMA_NUM_CTX,
+                "num_thread": OLLAMA_NUM_THREAD,
             },
         },
         timeout=OLLAMA_TIMEOUT,
