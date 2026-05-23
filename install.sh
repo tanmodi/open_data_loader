@@ -20,10 +20,39 @@ install_packages() {
   run_sudo apt-get install -y ca-certificates curl git openssl
 
   if ! command -v docker >/dev/null 2>&1; then
-    curl -fsSL https://get.docker.com | run_sudo sh
+    local docker_installer
+    docker_installer="$(mktemp)"
+    curl -fsSL https://get.docker.com -o "$docker_installer"
+    run_sudo sh "$docker_installer"
+    rm -f "$docker_installer"
   fi
 
   run_sudo systemctl enable --now docker
+
+  if ! command -v ollama >/dev/null 2>&1; then
+    local ollama_installer
+    ollama_installer="$(mktemp)"
+    curl -fsSL https://ollama.com/install.sh -o "$ollama_installer"
+    run_sudo sh "$ollama_installer"
+    rm -f "$ollama_installer"
+  fi
+
+  run_sudo systemctl enable --now ollama
+}
+
+install_gemma_model() {
+  local model="${OLLAMA_MODEL:-gemma4:e4b}"
+
+  for _ in {1..30}; do
+    if ollama list >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+
+  if ! ollama list | awk 'NR > 1 {print $1}' | grep -qx "$model"; then
+    ollama pull "$model"
+  fi
 }
 
 sync_repo() {
@@ -54,6 +83,7 @@ start_app() {
 }
 
 install_packages
+install_gemma_model
 sync_repo
 write_env
 start_app

@@ -8,6 +8,10 @@ services:
       DJANGO_DEBUG: "0"
       DJANGO_ALLOWED_HOSTS: "*"
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   nginx:
     image: nginx:1.27-alpine

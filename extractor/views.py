@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import tempfile
 from html import escape
 from io import BytesIO
@@ -6,8 +8,14 @@ from pathlib import Path
 
 import opendataloader_pdf
 import pdfplumber
-from django.http import HttpResponse, HttpResponseBadRequest
+import requests
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+
+
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))
 
 
 def home(_request):
@@ -22,6 +30,53 @@ def upload(request):
 @csrf_exempt
 def upload2(request):
     return handle_pdf_upload(request, extract_pdf_with_opendataloader)
+
+
+@csrf_exempt
+def ai_pdf_extract_v1(request):
+    if request.method == "GET":
+        return render_upload_ui(active_path=request.path)
+
+    if request.method != "POST":
+        return HttpResponseBadRequest("Use GET or POST with a PDF file in the 'file' form field.\n")
+
+    uploaded_file = request.FILES.get("file")
+    if uploaded_file is None:
+        return HttpResponseBadRequest("Missing PDF file in 'file' form field.\n")
+
+    if not uploaded_file.name.lower().endswith(".pdf"):
+        return HttpResponseBadRequest("Only PDF uploads are supported.\n")
+
+    try:
+        extracted_text = extract_pdf_with_opendataloader(uploaded_file.read(), uploaded_file.name)
+        llm_text = run_bill_extraction_llm(extracted_text)
+        bill_json = parse_json_object(llm_text)
+    except ValueError as exc:
+        if request.POST.get("ui") == "1":
+            return render_upload_ui(active_path=request.path, ai_error=str(exc), status=502)
+        return JsonResponse({"error": str(exc)}, status=502)
+    except requests.RequestException as exc:
+        error = f"Ollama request failed: {exc}"
+        if request.POST.get("ui") == "1":
+            return render_upload_ui(active_path=request.path, ai_error=error, status=502)
+        return JsonResponse({"error": error}, status=502)
+    except Exception as exc:
+        if request.POST.get("ui") == "1":
+            return render_upload_ui(active_path=request.path, ai_error=f"Could not extract PDF: {exc}", status=400)
+        return HttpResponseBadRequest(f"Could not extract PDF: {exc}\n")
+
+    response_data = {
+        "model": OLLAMA_MODEL,
+        "source": "upload2_text_extraction",
+        "data": bill_json,
+    }
+    if request.POST.get("ui") == "1":
+        return render_upload_ui(active_path=request.path, ai_json=response_data)
+
+    return JsonResponse(
+        response_data,
+        json_dumps_params={"ensure_ascii": False, "indent": 2},
+    )
 
 
 def handle_pdf_upload(request, extractor):
@@ -48,8 +103,8 @@ def handle_pdf_upload(request, extractor):
     return response
 
 
-def render_upload_ui(active_path="/upload"):
-    active_path = active_path if active_path in {"/upload", "/upload2"} else "/upload"
+def render_upload_ui(active_path="/upload", ai_json=None, ai_error=None, status=200):
+    active_path = active_path if active_path in {"/upload", "/upload2", "/ai/pdf_extract/v1"} else "/upload"
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -202,6 +257,83 @@ def render_upload_ui(active_path="/upload"):
       background: var(--accent-dark);
     }}
 
+    .actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }}
+
+    .secondary-button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 0 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      background: #ffffff;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+    }}
+
+    .secondary-button:hover {{
+      border-color: var(--accent);
+      color: var(--accent-dark);
+      background: #ffffff;
+    }}
+
+    .json-result {{
+      display: grid;
+      gap: 12px;
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--border);
+    }}
+
+    .json-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }}
+
+    h3 {{
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.3;
+    }}
+
+    pre {{
+      width: 100%;
+      max-height: 560px;
+      margin: 0;
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: #172033;
+      background: #f8fafc;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+
+    .error-box {{
+      margin-top: 22px;
+      padding: 14px 16px;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      color: #7f1d1d;
+      background: #fef2f2;
+      line-height: 1.45;
+    }}
+
     .note {{
       margin-top: 18px;
       padding-top: 18px;
@@ -242,14 +374,16 @@ def render_upload_ui(active_path="/upload"):
       <nav aria-label="Extractor">
         {nav_link("/upload", "PDF Plumber", active_path)}
         {nav_link("/upload2", "OpenDataLoader PDF", active_path)}
+        {nav_link("/ai/pdf_extract/v1", "AI JSON Extract", active_path)}
       </nav>
-      {upload_panel(active_path)}
+      {upload_panel(active_path, ai_json, ai_error)}
     </div>
   </div>
+{ui_script(active_path)}
 </body>
 </html>
 """
-    return HttpResponse(html, content_type="text/html; charset=utf-8")
+    return HttpResponse(html, content_type="text/html; charset=utf-8", status=status)
 
 
 def nav_link(path, label, active_path):
@@ -257,27 +391,203 @@ def nav_link(path, label, active_path):
     return f'<a href="{path}"{active_class}>{escape(label)}</a>'
 
 
-def upload_panel(action):
-    title = "PDF Plumber extraction" if action == "/upload" else "OpenDataLoader PDF extraction"
-    detail = (
-        "Extract plain text, JSON tables, and table text with pdfplumber."
-        if action == "/upload"
-        else "Extract plain text, JSON tables, and table text with OpenDataLoader PDF."
-    )
+def upload_panel(action, ai_json=None, ai_error=None):
+    if action == "/upload":
+        title = "PDF Plumber extraction"
+        detail = "Extract plain text, JSON tables, and table text with pdfplumber."
+        button_text = "Download TXT"
+    elif action == "/upload2":
+        title = "OpenDataLoader PDF extraction"
+        detail = "Extract plain text, JSON tables, and table text with OpenDataLoader PDF."
+        button_text = "Download TXT"
+    else:
+        title = "AI electricity bill extraction"
+        detail = "Extract Indian electricity bill values as JSON with local Gemma through Ollama."
+        button_text = "Extract JSON"
+
+    hidden_fields = '<input type="hidden" name="ui" value="1">' if action == "/ai/pdf_extract/v1" else ""
+
     return f"""<main>
         <h2>{escape(title)}</h2>
         <p>{escape(detail)}</p>
         <form method="post" action="{escape(action)}" enctype="multipart/form-data">
+          {hidden_fields}
           <div class="file-box">
             <label for="file">PDF file</label>
             <input id="file" type="file" name="file" accept="application/pdf,.pdf" required>
           </div>
-          <button type="submit">Download TXT</button>
+          <button type="submit">{escape(button_text)}</button>
         </form>
         <div class="note">
-          The downloaded TXT includes <code>###PLAIN_START###</code>, <code>###TABLE_START###</code>, and <code>###BEXT_TABLE_START###</code> sections.
+          {upload_note(action)}
         </div>
+        {ai_result_panel(action, ai_json, ai_error)}
       </main>"""
+
+
+def upload_note(action):
+    if action == "/ai/pdf_extract/v1":
+        return f"Returns <code>application/json</code> from local <code>{escape(OLLAMA_MODEL)}</code>."
+    return "The downloaded TXT includes <code>###PLAIN_START###</code>, <code>###TABLE_START###</code>, and <code>###BEXT_TABLE_START###</code> sections."
+
+
+def ai_result_panel(action, ai_json, ai_error):
+    if action != "/ai/pdf_extract/v1":
+        return ""
+    if ai_error:
+        return f'<div class="error-box">{escape(ai_error)}</div>'
+    if ai_json is None:
+        return ""
+
+    json_text = json.dumps(ai_json, ensure_ascii=False, indent=2)
+    return f"""<section class="json-result" aria-label="AI JSON result">
+          <div class="json-header">
+            <h3>Extracted JSON</h3>
+            <div class="actions">
+              <button class="secondary-button" type="button" data-copy-json>Copy</button>
+              <button class="secondary-button" type="button" data-download-json>Download</button>
+            </div>
+          </div>
+          <pre id="json-output">{escape(json_text)}</pre>
+        </section>"""
+
+
+def ui_script(active_path):
+    if active_path != "/ai/pdf_extract/v1":
+        return ""
+    return """<script>
+  (() => {
+    const output = document.getElementById("json-output");
+    if (!output) {
+      return;
+    }
+
+    const copyButton = document.querySelector("[data-copy-json]");
+    const downloadButton = document.querySelector("[data-download-json]");
+
+    copyButton?.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(output.textContent);
+      copyButton.textContent = "Copied";
+      window.setTimeout(() => {
+        copyButton.textContent = "Copy";
+      }, 1400);
+    });
+
+    downloadButton?.addEventListener("click", () => {
+      const blob = new Blob([output.textContent], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "electricity-bill-extraction.json";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    });
+  })();
+</script>"""
+
+
+def run_bill_extraction_llm(extracted_text):
+    prompt = build_bill_extraction_prompt(extracted_text)
+    response = requests.post(
+        f"{OLLAMA_BASE_URL}/api/generate",
+        json={
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0,
+                "num_ctx": 32768,
+            },
+        },
+        timeout=OLLAMA_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    generated_text = payload.get("response", "")
+    if not generated_text.strip():
+        raise ValueError("Ollama returned an empty response")
+    return generated_text
+
+
+def build_bill_extraction_prompt(extracted_text):
+    return f"""Extract all values from this Indian electricity bill PDF extraction.
+
+Return only one valid JSON object. Do not include markdown or explanation.
+Use null when a value is not present. Preserve exact values, units, dates,
+currency symbols, account numbers, meter numbers, tariff names, and labels
+as they appear in the bill.
+
+Expected JSON shape:
+{{
+  "document_type": "electricity_bill",
+  "country": "India",
+  "provider": null,
+  "consumer": {{
+    "name": null,
+    "consumer_number": null,
+    "account_number": null,
+    "address": null,
+    "mobile": null,
+    "email": null
+  }},
+  "bill": {{
+    "bill_number": null,
+    "bill_date": null,
+    "due_date": null,
+    "billing_period": null,
+    "amount_due": null,
+    "amount_after_due_date": null,
+    "previous_balance": null,
+    "payments_received": null,
+    "total_charges": null
+  }},
+  "meter": {{
+    "meter_number": null,
+    "phase": null,
+    "tariff": null,
+    "sanctioned_load": null,
+    "connected_load": null
+  }},
+  "readings": [],
+  "charges": [],
+  "taxes": [],
+  "all_extracted_values": [
+    {{
+      "label": null,
+      "value": null,
+      "unit": null,
+      "category": null,
+      "source_text": null
+    }}
+  ],
+  "confidence": null
+}}
+
+PDF extraction:
+{extracted_text}
+"""
+
+
+def parse_json_object(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"{", text):
+        try:
+            value, _end = decoder.raw_decode(text[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+
+    raise ValueError("Gemma did not return valid JSON")
 
 
 def extract_pdf(pdf_bytes, _filename="uploaded.pdf"):
