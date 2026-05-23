@@ -4,7 +4,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/home/bsnl/openloader}"
 REPO_URL="${REPO_URL:-https://github.com/tanmodi/open_data_loader.git}"
 BRANCH="${BRANCH:-main}"
-SWAP_SIZE_GB="${SWAP_SIZE_GB:-4}"
+SWAP_SIZE_GB="${SWAP_SIZE_GB:-5}"
 
 run_sudo() {
   if [[ "$(id -u)" -eq 0 ]]; then
