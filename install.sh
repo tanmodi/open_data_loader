@@ -54,8 +54,8 @@ configure_swap() {
   fi
 
   run_sudo swapon /swapfile || true
-  if ! grep -qE '^[^#[:space:]]+[[:space:]]+none[[:space:]]+swap[[:space:]]' /etc/fstab; then
-    echo "/swapfile none swap sw 0 0" | run_sudo tee -a /etc/fstab >/dev/null
+  if ! grep -qE '^/swapfile\s' /etc/fstab; then
+    run_sudo sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
   fi
 }
 
