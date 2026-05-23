@@ -10,6 +10,7 @@ services:
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b}"
+      OLLAMA_NUM_CTX: "${OLLAMA_NUM_CTX:-8192}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

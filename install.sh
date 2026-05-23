@@ -4,6 +4,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/home/bsnl/openloader}"
 REPO_URL="${REPO_URL:-https://github.com/tanmodi/open_data_loader.git}"
 BRANCH="${BRANCH:-main}"
+SWAP_SIZE_GB="${SWAP_SIZE_GB:-12}"
 
 run_sudo() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -18,6 +19,7 @@ run_sudo() {
 install_packages() {
   run_sudo apt-get update
   run_sudo apt-get install -y ca-certificates curl git openssl
+  configure_swap
 
   if ! command -v docker >/dev/null 2>&1; then
     local docker_installer
@@ -38,6 +40,23 @@ install_packages() {
   fi
 
   configure_ollama_service
+}
+
+configure_swap() {
+  if [[ "$SWAP_SIZE_GB" == "0" ]] || swapon --show=NAME --noheadings | grep -q "^/swapfile$"; then
+    return
+  fi
+
+  if [[ ! -f /swapfile ]]; then
+    run_sudo fallocate -l "${SWAP_SIZE_GB}G" /swapfile
+    run_sudo chmod 600 /swapfile
+    run_sudo mkswap /swapfile
+  fi
+
+  run_sudo swapon /swapfile || true
+  if ! grep -qE '^[^#[:space:]]+[[:space:]]+none[[:space:]]+swap[[:space:]]' /etc/fstab; then
+    echo "/swapfile none swap sw 0 0" | run_sudo tee -a /etc/fstab >/dev/null
+  fi
 }
 
 configure_ollama_service() {
