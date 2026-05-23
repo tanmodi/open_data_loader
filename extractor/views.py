@@ -24,8 +24,11 @@ def upload2(request):
 
 
 def handle_pdf_upload(request, extractor):
+    if request.method == "GET":
+        return upload_form(request.path)
+
     if request.method != "POST":
-        return HttpResponseBadRequest("POST a PDF file using the 'file' form field.\n")
+        return HttpResponseBadRequest("Use GET or POST with a PDF file in the 'file' form field.\n")
 
     uploaded_file = request.FILES.get("file")
     if uploaded_file is None:
@@ -42,6 +45,24 @@ def handle_pdf_upload(request, extractor):
     response = HttpResponse(result, content_type="text/plain; charset=utf-8")
     response["Content-Disposition"] = 'attachment; filename="extracted.txt"'
     return response
+
+
+def upload_form(action):
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Upload PDF</title>
+</head>
+<body>
+  <form method="post" action="{action}" enctype="multipart/form-data">
+    <input type="file" name="file" accept="application/pdf" required>
+    <button type="submit">Upload</button>
+  </form>
+</body>
+</html>
+"""
+    return HttpResponse(html, content_type="text/html; charset=utf-8")
 
 
 def extract_pdf(pdf_bytes, _filename="uploaded.pdf"):
