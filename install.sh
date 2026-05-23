@@ -37,7 +37,20 @@ install_packages() {
     rm -f "$ollama_installer"
   fi
 
+  configure_ollama_service
+}
+
+configure_ollama_service() {
+  run_sudo mkdir -p /etc/systemd/system/ollama.service.d
+  local override_file="/tmp/ollama-openloader-override.conf"
+  cat > "$override_file" <<EOF
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+EOF
+  run_sudo mv "$override_file" /etc/systemd/system/ollama.service.d/openloader.conf
+  run_sudo systemctl daemon-reload
   run_sudo systemctl enable --now ollama
+  run_sudo systemctl restart ollama
 }
 
 install_gemma_model() {
