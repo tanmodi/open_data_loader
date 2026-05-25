@@ -74,7 +74,7 @@ EOF
 }
 
 install_gemma_model() {
-  local model="${OLLAMA_MODEL:-gemma4:e4b}"
+  local model="${OLLAMA_MODEL:-qwen3.5:0.8b-mlx}"
 
   for _ in {1..30}; do
     if ollama list >/dev/null 2>&1; then

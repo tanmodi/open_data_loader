@@ -9,7 +9,7 @@ services:
       DJANGO_ALLOWED_HOSTS: "*"
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen3.5:0.8b-mlx}"
       OLLAMA_NUM_CTX: "${OLLAMA_NUM_CTX:-8192}"
       OLLAMA_NUM_THREAD: "${OLLAMA_NUM_THREAD:-8}"
       OLLAMA_TIMEOUT: "${OLLAMA_TIMEOUT:-900}"
