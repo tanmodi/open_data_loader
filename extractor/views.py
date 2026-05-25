@@ -9,7 +9,7 @@ from pathlib import Path
 import opendataloader_pdf
 import pdfplumber
 import requests
-from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
 
@@ -17,7 +17,7 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rs
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:latest")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
-OLLAMA_NUM_THREAD = int(os.environ.get("OLLAMA_NUM_THREAD", "16"))
+OLLAMA_NUM_THREAD = int(os.environ.get("OLLAMA_NUM_THREAD", "12"))
 
 
 def home(_request):
@@ -79,6 +79,50 @@ def ai_pdf_extract_v1(request):
         response_data,
         json_dumps_params={"ensure_ascii": False, "indent": 2},
     )
+
+
+@csrf_exempt
+def ai_pdf_extract_v1_stream(request):
+    if request.method != "POST":
+        return HttpResponseBadRequest("Use POST with a PDF file in the 'file' form field.\n")
+
+    uploaded_file = request.FILES.get("file")
+    if uploaded_file is None:
+        return HttpResponseBadRequest("Missing PDF file in 'file' form field.\n")
+
+    if not uploaded_file.name.lower().endswith(".pdf"):
+        return HttpResponseBadRequest("Only PDF uploads are supported.\n")
+
+    def event_stream():
+        try:
+            yield stream_event("status", "Extracting PDF text...")
+            extracted_text = extract_pdf_with_opendataloader(uploaded_file.read(), uploaded_file.name)
+            yield stream_event("status", f"Running {OLLAMA_MODEL} with {OLLAMA_NUM_THREAD} threads...")
+
+            llm_chunks = []
+            for chunk in run_bill_extraction_llm_stream(extracted_text):
+                llm_chunks.append(chunk)
+                yield stream_event("token", chunk)
+
+            llm_text = "".join(llm_chunks)
+            bill_json = parse_json_object(llm_text)
+            response_data = {
+                "model": OLLAMA_MODEL,
+                "source": "upload2_text_extraction",
+                "data": bill_json,
+            }
+            yield stream_event("final", response_data)
+        except Exception as exc:
+            yield stream_event("error", str(exc))
+
+    response = StreamingHttpResponse(event_stream(), content_type="application/x-ndjson; charset=utf-8")
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+def stream_event(event, data):
+    return json.dumps({"event": event, "data": data}, ensure_ascii=False) + "\n"
 
 
 def handle_pdf_upload(request, extractor):
@@ -259,6 +303,11 @@ def render_upload_ui(active_path="/upload", ai_json=None, ai_error=None, status=
       background: var(--accent-dark);
     }}
 
+    button:disabled {{
+      cursor: wait;
+      opacity: 0.72;
+    }}
+
     .actions {{
       display: flex;
       flex-wrap: wrap;
@@ -293,6 +342,10 @@ def render_upload_ui(active_path="/upload", ai_json=None, ai_error=None, status=
       margin-top: 22px;
       padding-top: 22px;
       border-top: 1px solid var(--border);
+    }}
+
+    .json-result[hidden] {{
+      display: none;
     }}
 
     .json-header {{
@@ -412,7 +465,7 @@ def upload_panel(action, ai_json=None, ai_error=None):
     return f"""<main>
         <h2>{escape(title)}</h2>
         <p>{escape(detail)}</p>
-        <form method="post" action="{escape(action)}" enctype="multipart/form-data">
+        <form method="post" action="{escape(action)}" enctype="multipart/form-data" data-ai-form="{"1" if action == "/ai/pdf_extract/v1" else "0"}">
           {hidden_fields}
           <div class="file-box">
             <label for="file">PDF file</label>
@@ -438,11 +491,10 @@ def ai_result_panel(action, ai_json, ai_error):
         return ""
     if ai_error:
         return f'<div class="error-box">{escape(ai_error)}</div>'
-    if ai_json is None:
-        return ""
 
-    json_text = json.dumps(ai_json, ensure_ascii=False, indent=2)
-    return f"""<section class="json-result" aria-label="AI JSON result">
+    json_text = "" if ai_json is None else json.dumps(ai_json, ensure_ascii=False, indent=2)
+    hidden_attr = " hidden" if ai_json is None else ""
+    return f"""<section class="json-result" aria-label="AI JSON result"{hidden_attr}>
           <div class="json-header">
             <h3>Extracted JSON</h3>
             <div class="actions">
@@ -459,13 +511,82 @@ def ui_script(active_path):
         return ""
     return """<script>
   (() => {
+    const form = document.querySelector('form[data-ai-form="1"]');
+    const resultPanel = document.querySelector(".json-result");
     const output = document.getElementById("json-output");
     if (!output) {
       return;
     }
 
+    const submitButton = form?.querySelector('button[type="submit"]');
     const copyButton = document.querySelector("[data-copy-json]");
     const downloadButton = document.querySelector("[data-download-json]");
+
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      output.textContent = "";
+      resultPanel.hidden = false;
+      submitButton.disabled = true;
+      submitButton.textContent = "Extracting...";
+
+      try {
+        const response = await fetch("/ai/pdf_extract/v1/stream", {
+          method: "POST",
+          body: new FormData(form),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Request failed with HTTP ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let liveText = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.trim()) {
+              continue;
+            }
+
+            let message;
+            try {
+              message = JSON.parse(line);
+            } catch (error) {
+              output.textContent = `Server returned a non-stream response:\\n${line}`;
+              continue;
+            }
+            if (message.event === "status") {
+              output.textContent = `${message.data}\\n\\n${liveText}`;
+            } else if (message.event === "token") {
+              liveText += message.data;
+              output.textContent = liveText;
+            } else if (message.event === "final") {
+              output.textContent = JSON.stringify(message.data, null, 2);
+            } else if (message.event === "error") {
+              output.textContent = `Error: ${message.data}`;
+            }
+            output.scrollTop = output.scrollHeight;
+          }
+        }
+      } catch (error) {
+        output.textContent = `Error: ${error.message}`;
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = "Extract JSON";
+      }
+    });
 
     copyButton?.addEventListener("click", async () => {
       await navigator.clipboard.writeText(output.textContent);
@@ -514,6 +635,35 @@ def run_bill_extraction_llm(extracted_text):
     if not generated_text.strip():
         raise ValueError("Ollama returned an empty response")
     return generated_text
+
+
+def run_bill_extraction_llm_stream(extracted_text):
+    prompt = build_bill_extraction_prompt(extracted_text)
+    with requests.post(
+        f"{OLLAMA_BASE_URL}/api/generate",
+        json={
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": True,
+            "format": "json",
+            "options": {
+                "temperature": 0,
+                "num_ctx": OLLAMA_NUM_CTX,
+                "num_thread": OLLAMA_NUM_THREAD,
+            },
+        },
+        timeout=OLLAMA_TIMEOUT,
+        stream=True,
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+
+            payload = json.loads(line)
+            chunk = payload.get("response", "")
+            if chunk:
+                yield chunk
 
 
 def build_bill_extraction_prompt(extracted_text):

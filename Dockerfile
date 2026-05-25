@@ -16,4 +16,4 @@ COPY . .
 
 RUN python manage.py collectstatic --noinput
 
-CMD ["gunicorn", "open_data_loader.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "900"]
+CMD ["gunicorn", "open_data_loader.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "3600"]
